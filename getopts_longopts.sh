@@ -44,11 +44,12 @@ function sub_help {
 Usage:  $PROG [options] <param1> [<params>...]
 
 Options:
+	option		arg	description
 
 	-h|--help|help		Print help
 	-v|--verbose		Increase verbosity (can be repeated)
 	-a|--alpha		Boolean switch
-	-b BOPT|--bravo=BOPT	Set bravo to BOPT (default: bravo_default)
+	-b|--bravo	BOPT	Set bravo to BOPT (default: bravo_default)
 
 Positional arguments:
 
@@ -56,7 +57,7 @@ Positional arguments:
 
 Long option arguments may be demarcated by either space or '='
 EOF
-  exit ${1-0}
+  exit ${1:-0}
 }
 
 # Set optional argument defaults
@@ -65,29 +66,28 @@ alpha=0
 bravo="bravo_default"
 
 # Convert all recognized long options to short options:
-unset PARAMS
-declare -a PARAMS             # Use Bash indexed array to store arguments during processing
+PARAMS=()
 for arg in "$@" ; do
   case "$arg" in
-    help)         PARAMS[${#PARAMS[@]}]="-h" ;;   # NB: 'help' positional arg turned into a -h option
+    help)         PARAMS+=("-h") ;;   # NB: 'help' positional arg turned into a -h option
     --?*)
       longopt="${arg#--}"
       longopt="${longopt%%=*}"
       shortopt="${l2s[$longopt]}"
       if [ -z "$shortopt" ] ; then
         # Pass through unrecognized options
-        PARAMS[${#PARAMS[@]}]="$arg"
+        PARAMS+=("$arg")
       else
         # Check for '='-separated options
         optarg="${arg#--${longopt}}"
         optarg="${optarg#=}"
-        PARAMS[${#PARAMS[@]}]="-$shortopt"
+        PARAMS+=("-$shortopt")
         if [ -n "$optarg" ] ; then
-          PARAMS[${#PARAMS[@]}]="${optarg}"       # handle long option with '=' separator before optarg
+          PARAMS+=("${optarg}")       # handle long option with '=' separator before optarg
         fi
       fi
       ;;
-    *)            PARAMS[${#PARAMS[@]}]="$arg" ;; # Pass through anything else
+    *)            PARAMS+=("$arg") ;; # Pass through anything else
   esac
 done
 

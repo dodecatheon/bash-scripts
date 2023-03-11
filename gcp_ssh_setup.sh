@@ -95,29 +95,28 @@ EOF
 }
 
 # Convert all recognized long options to short options:
-unset PARAMS
-declare -a PARAMS             # Use Bash indexed array to store arguments during processing
+PARAMS=()             # Use Bash indexed array to store arguments during processing
 for arg in "$@" ; do
   case "$arg" in
-    help)         PARAMS[${#PARAMS[@]}]="-h" ;;   # NB: 'help' positional arg turned into a -h option
+    help)         PARAMS+=("-h") ;;   # NB: 'help' positional arg turned into a -h option
     --?*)
       longopt="${arg#--}"
       longopt="${longopt%%=*}"
       shortopt="${l2s[$longopt]}"
       if [ -z "$shortopt" ] ; then
         # Pass through unrecognized options
-        PARAMS[${#PARAMS[@]}]="$arg"
+        PARAMS+=("$arg")
       else
         # Check for '='-separated options
         optarg="${arg#--${longopt}}"
         optarg="${optarg#=}"
-        PARAMS[${#PARAMS[@]}]="-$shortopt"
+        PARAMS+=("-$shortopt")
         if [ -n "$optarg" ] ; then
-          PARAMS[${#PARAMS[@]}]="${optarg}"       # handle long option with '=' separator before optarg
+          PARAMS+=("${optarg}")       # handle long option with '=' separator before optarg
         fi
       fi
       ;;
-    *)            PARAMS[${#PARAMS[@]}]="$arg" ;; # Pass through anything else
+    *)            PARAMS+=("$arg") ;; # Pass through anything else
   esac
 done
 
@@ -186,7 +185,7 @@ else
   fi
 fi
 
-if test -v logfile && ((verbose)) ; then
+if test -v logfile && ((verbose > 1)) ; then
   echo "logfile set to $logfile"
 fi
 
@@ -210,10 +209,10 @@ if (( $# > 0 )) ; then
 else
   if ! test -v project ; then
     if test -v PROJECT ; then
-      ((verbose)) && echo "Setting project from \$PROJECT"
+      ((verbose > 1)) && echo "Setting project from \$PROJECT"
       project="$PROJECT"
     elif gcloud config list --format='text(core.project)' >/dev/null 2>/dev/null ; then
-      ((verbose)) && echo "Setting project from gcloud config list check"
+      ((verbose > 1)) && echo "Setting project from gcloud config list check"
       project="$(gcloud config list --format='text(core.project)' 2>/dev/null | awk '{print $2}')"
     else
       die "No project specified"
@@ -221,7 +220,7 @@ else
   fi
 fi
 export project
-((verbose)) && echo "project = $project"
+((verbose > 1)) && echo "project = $project"
 
 # Ensure ~/.ssh/, and ~/.ssh/config.d/ exist
 mkdir -p ~/.ssh/config.d
@@ -242,6 +241,12 @@ else
   exec 8< <(echo "$REMOTE_HOST")
 fi
 
+# Keep track of created files
+configlist="$HOME/.ssh/gcp_ssh_setup_configs.txt"
+scriptlist="$HOME/.ssh/gcp_ssh_setup_scripts.txt"
+: > $configlist
+: > $scriptlist
+
 # Then read the variable via unit 8
 while read -u8 REMOTE_HOST ; do
   # Workaround the problem of doing an ssh command within a while
@@ -255,9 +260,8 @@ while read -u8 REMOTE_HOST ; do
 
   # then read the while loop from unit 9
   while read -u9 hka zone ; do
-    if ((verbose>1)) ; then
-      echo "hka set to $hka"
-      echo "zone set to $zone"
+    if ((verbose > 1)) ; then
+      echo "hka: $hka, zone: $zone"
     fi
 
     gcloud_ssh="gcloud $group ssh $hka --project=$project --zone=$zone --tunnel-through-iap"
@@ -266,7 +270,9 @@ while read -u8 REMOTE_HOST ; do
     printf "#!/bin/sh\n$gcloud_ssh \${1+\$@}\n" > $ssh_filename
     chmod +x $ssh_filename
 
-    if ((verbose)) ; then
+    echo $ssh_filename >> $scriptlist
+
+    if ((verbose>1)) ; then
       echo "Running '$ssh_filename --command=whoami' to set up keys for $hka on this host"
       echo "The contents of $ssh_filename are"
       sed -re 's/^/\t/' $ssh_filename
@@ -275,12 +281,12 @@ while read -u8 REMOTE_HOST ; do
     # This is the problematic command requiring stdin redirects above.
     # The -n ssh flag might get around it, but it doesn't hurt to be safe.
     remote_user="$(eval $ssh_filename --ssh-flag=-n --command=whoami 2>/dev/null)"
-    ((verbose>1)) && echo "remote_user set to $remote_user"
+    ((verbose > 1)) && echo "remote_user set to $remote_user"
 
     if test -v REMOTE_USER ; then
       remote_user="$REMOTE_USER"
     fi
-    ((verbose)) && printf "\n\tRemote user = $remote_user\n"
+    ((verbose > 1)) && printf "\n\tRemote user = $remote_user\n"
 
     hostalias="$hka"
     if test -v nickname ; then
@@ -306,7 +312,7 @@ while read -u8 REMOTE_HOST ; do
 	
 	EOF
 
-    if ((verbose)) ; then
+    if ((verbose > 1)) ; then
       cat <<-EOF
 	-----------------------------------
 	This host has ssh keys set up to use ssh from the commandline, and ssh aliases
@@ -319,12 +325,13 @@ while read -u8 REMOTE_HOST ; do
 	EOF
       sed -re 's/^/\t/' $ssh_config_filename
     fi
+    echo $ssh_config_filename >> $configlist
   done
 done
 
 gcp_group_filename="$HOME/.ssh/config.d/zzz_match_host_${group}_gcp"
 
-if ((verbose)) ; then
+if ((verbose > 1)) ; then
   echo "------"
   cat <<-EOF
 	The ssh config stanzas in config.d rely on the stanza saved to $gcp_group_filename being found
@@ -355,15 +362,17 @@ cat >"$gcp_group_filename" <<-EOF
 	
 	EOF
 
-if ((verbose)) ; then
+if ((verbose > 1)) ; then
   sed -re 's/^/\t/' $gcp_group_filename
 fi
 
+echo $gcp_group_filename >> $configlist
+
 # Ensure 'Include ~/.ssh/config.d/*' is at the top of ~/.ssh/config:
 if test -s $HOME/.ssh/config ; then
-  ((verbose)) && echo '~/.ssh/config exists'
+  ((verbose > 1)) && echo '~/.ssh/config exists'
   if grep '^Include "\~/.ssh/config.d/\*"' $HOME/.ssh/config >/dev/null 2>&1 ; then
-    ((verbose)) && echo "~/.ssh/config is already set up"
+    ((verbose > 1)) && echo "~/.ssh/config is already set up"
   else
     /bin/cp -f $HOME/.ssh/config $HOME/.ssh/config~
     printf 'Include "~/.ssh/config.d/*"\n\n' | cat - $HOME/.ssh/config~ > $HOME/.ssh/config
@@ -374,6 +383,15 @@ fi
 chmod -R go-rwx $HOME/.ssh
 
 if ((verbose)) ; then
-  echo "The first few lines of ~/.ssh/config are now"
+  printf "\nSSH scripts created by this utility:\n\n"
+  xargs ls -l < $scriptlist
+
+  printf "\nSSH config stanzas created by this utility:\n\n"
+  xargs ls -l < $configlist
+
+  printf "\nContents of the config stanzas, as they would be included by ~/.ssh/config:\n\n"
+  xargs cat < $configlist
+
+  printf "\nThe first few lines of ~/.ssh/config are now:\n\n"
   head ~/.ssh/config | nl
 fi
