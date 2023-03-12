@@ -24,7 +24,7 @@ l2s['verbose']='v'; s2l['v']='verbose'
 # Utility functions:
 shortlong () { echo "-$1|--${s2l[$1]}"; }
 longshort () { echo "-${l2s[$1]}|--$1"; }
-die() { printf "\n$1\n" >&2; sub_help ${2-2}; }  # complain to STDERR and exit with error
+die() { printf "\n$1\n" >&2; usage ${2-2}; }  # complain to STDERR and exit with error
 needs_arg() {
   if [ -z "$OPTARG" ]; then
     die "Missing argument for $(shortlong $OPT) option"
@@ -38,7 +38,7 @@ needs_arg() {
 }
 no_arg() { if [ -n "$OPTARG" ]; then die "No argument allowed for $(shortlong $OPT) option"; fi; }
 
-function sub_help {
+function usage {
   cat >&2 <<EOF
 
 Usage:  $PROG [options] <param1> [<params>...]
@@ -49,7 +49,7 @@ Options:
 	-h|--help|help		Print help
 	-v|--verbose		Increase verbosity (can be repeated)
 	-a|--alpha		Boolean switch
-	-b|--bravo	BOPT	Set bravo to BOPT (default: bravo_default)
+	-b|--bravo[=]	BOPT	Set bravo to BOPT (default: bravo_default)
 
 Positional arguments:
 
@@ -66,28 +66,28 @@ alpha=0
 bravo="bravo_default"
 
 # Convert all recognized long options to short options:
-PARAMS=()
+SHORTARGS=()
 for arg in "$@" ; do
   case "$arg" in
-    help)         PARAMS+=("-h") ;;   # NB: 'help' positional arg turned into a -h option
+    help)         SHORTARGS+=("-h") ;;   # NB: 'help' positional arg turned into a -h option
     --?*)
       longopt="${arg#--}"
       longopt="${longopt%%=*}"
       shortopt="${l2s[$longopt]}"
       if [ -z "$shortopt" ] ; then
         # Pass through unrecognized options
-        PARAMS+=("$arg")
+        SHORTARGS+=("$arg")
       else
         # Check for '='-separated options
         optarg="${arg#--${longopt}}"
         optarg="${optarg#=}"
-        PARAMS+=("-$shortopt")
+        SHORTARGS+=("-$shortopt")
         if [ -n "$optarg" ] ; then
-          PARAMS+=("${optarg}")       # handle long option with '=' separator before optarg
+          SHORTARGS+=("${optarg}")       # handle long option with '=' separator before optarg
         fi
       fi
       ;;
-    *)            PARAMS+=("$arg") ;; # Pass through anything else
+    *)            SHORTARGS+=("$arg") ;; # Pass through anything else
   esac
 done
 
@@ -95,14 +95,16 @@ done
 # Do this in a 'for' loop to ensure that individual arguments remain quoted if
 # necessary
 set --
-for arg in "${PARAMS[@]}"; do
+for arg in "${SHORTARGS[@]}"; do
   set -- "$@" "$arg"
 done
 
 # Process all options as short arguments.
+# Save long arguments as we go along
+LONGARGS=()
 while getopts :hv-:ab: OPT; do
   case "$OPT" in
-    h )    sub_help ;;
+    h )    usage ;;
     v )    no_arg    && ((++verbose)) ;;
     a )    no_arg    && alpha=1 ;;
     b )    needs_arg && bravo="$OPTARG" ;;
@@ -112,13 +114,19 @@ while getopts :hv-:ab: OPT; do
            else
              die "Unknown long option \'--${OPTARG}\'"
            fi ;;  # Stop processing optional arguments
-    ? )    die "Unknown short option \'-${OPTARG}\'" ;;
+    \?)    die "Unknown short option \'-${OPTARG}\'" ;;
   esac
+  # Save the long version of the args as we go along
+  if [ -n "$OPTARG" ] ; then
+    LONGARGS+=("--${s2l[$OPT]}=\"${OPTARG}\"")
+  else
+    LONGARGS+=("--${s2l[$OPT]}")
+  fi
 done
 shift $((OPTIND-1))             # remove parsed options and args from $@ list
 
 if ! (($#)) ; then
-  sub_help 2
+  usage 2
 fi
 
 # Example verbose processing
@@ -130,3 +138,7 @@ fi
 printf "alpha=$alpha\nbravo=$bravo\nverbose=$verbose\n"
 echo "Remaining args:"
 printf "\t\"%s\"\n" "$@"
+echo "Saved SHORTARGS:"
+echo "${SHORTARGS[@]}"
+echo "Saved LONGARGS:"
+echo "${LONGARGS[@]}"
