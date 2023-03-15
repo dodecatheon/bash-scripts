@@ -69,12 +69,13 @@ Usage:  $PROG [options] <[REMOTE_USER@]REMOTE_HOST|LOGFILE> [PROJECT]
 
 Options:
 
+        (option)		(arg)	(description)
 	-h|--help|help			Print help
 	-v|--verbose			Increase verbosity (can be repeated)
-        -g GROUP|--group=GROUP		GCE group (default: compute)
-        -n NICK|--nicknamel=NICK	Optional nickname for remote host
-        -p PROJECT|--project=PROJECT	Gcloud project, if not able to infer from env or gcloud
-        -u USER|--remote-user=USER	Remote user, if not able to infer from 'whoami' on remote host
+        -g|--group		GROUP	GCE group (default: compute)
+        -n|--nickname		NICK	Optional nickname for remote host
+        -p|--project		PROJECT	Gcloud project, if not able to infer from env or gcloud
+        -u|--remote-user	USER	Remote user, if not able to infer from 'whoami' on remote host
 
 Positional arguments:
 
@@ -95,28 +96,28 @@ EOF
 }
 
 # Convert all recognized long options to short options:
-PARAMS=()             # Use Bash indexed array to store arguments during processing
+SHORTARGS=()             # Use Bash indexed array to store arguments during processing
 for arg in "$@" ; do
   case "$arg" in
-    help)         PARAMS+=("-h") ;;   # NB: 'help' positional arg turned into a -h option
+    help)         SHORTARGS+=("-h") ;;   # NB: 'help' positional arg turned into a -h option
     --?*)
       longopt="${arg#--}"
       longopt="${longopt%%=*}"
       shortopt="${l2s[$longopt]}"
       if [ -z "$shortopt" ] ; then
         # Pass through unrecognized options
-        PARAMS+=("$arg")
+        SHORTARGS+=("$arg")
       else
         # Check for '='-separated options
         optarg="${arg#--${longopt}}"
         optarg="${optarg#=}"
-        PARAMS+=("-$shortopt")
+        SHORTARGS+=("-$shortopt")
         if [ -n "$optarg" ] ; then
-          PARAMS+=("${optarg}")       # handle long option with '=' separator before optarg
+          SHORTARGS+=("${optarg}")       # handle long option with '=' separator before optarg
         fi
       fi
       ;;
-    *)            PARAMS+=("$arg") ;; # Pass through anything else
+    *)            SHORTARGS+=("$arg") ;; # Pass through anything else
   esac
 done
 
@@ -124,7 +125,7 @@ done
 # Do this in a 'for' loop to ensure that individual arguments remain quoted if
 # necessary
 set --
-for arg in "${PARAMS[@]}"; do
+for arg in "${SHORTARGS[@]}"; do
   set -- "$@" "$arg"
 done
 
@@ -137,6 +138,7 @@ unset nickname
 unset REMOTE_USER
 
 # Process all options as short arguments.
+LONGARGS=()
 while getopts :hv-:g:l:p:r:s: OPT; do
   case "$OPT" in
     h )    usage ;;
@@ -153,6 +155,12 @@ while getopts :hv-:g:l:p:r:s: OPT; do
            fi ;;  # Stop processing optional arguments
     ? )    die "Unknown short option \'-${OPTARG}\'" ;;
   esac
+  # Save the long version of the args as we go along
+  if [ -n "$OPTARG" ] ; then
+    LONGARGS+=("--${s2l[$OPT]}=\"${OPTARG}\"")
+  else
+    LONGARGS+=("--${s2l[$OPT]}")
+  fi
 done
 shift $((OPTIND-1))             # remove parsed options and args from $@ list
 
@@ -308,7 +316,7 @@ while read -u8 REMOTE_HOST ; do
 	Host $hostalias
 	   User				${remote_user}
 	   HostKeyAlias			$hka
-	   Hostname			$hka.$project.$zone.${group}.gcp
+	   Hostname			$hka.$project.$zone.${group// /_}.gcp
 	
 	EOF
 
@@ -329,7 +337,7 @@ while read -u8 REMOTE_HOST ; do
   done
 done
 
-gcp_group_filename="$HOME/.ssh/config.d/zzz_match_host_${group}_gcp"
+gcp_group_filename="$HOME/.ssh/config.d/zzz_match_host_${group// /_}_gcp"
 
 if ((verbose > 1)) ; then
   echo "------"
@@ -342,19 +350,19 @@ fi
 
 cat >"$gcp_group_filename" <<-EOF
 	# Pseudo-host format for GCP ${group} VM instances:
-	#    instance.project.zone.${group}.gcp
+	#    instance.project.zone.${group// /_}.gcp
 	#
 	# Host short-name instance-name
 	#     User           ldap_google_com
 	#     HostKeyAlias   instance-name
-	#     HostName       instance-name.project.zone.${group}.gcp
+	#     HostName       instance-name.project.zone.${group// /_}.gcp
 	#
 	# Add additional stanzas for different gcloud groups
 	#
 	# Be sure you set the HostKeyAlias to the instance name.
-	Match Host *.*.*.${group}.gcp
-	    IdentityFile                ~/.ssh/google_${group}_engine
-	    UserKnownHostsFile          ~/.ssh/google_${group}_known_hosts
+	Match Host *.*.*.${group// /_}.gcp
+	    IdentityFile                ~/.ssh/google_${group// /_}_engine
+	    UserKnownHostsFile          ~/.ssh/google_${group// /_}_known_hosts
 	    IdentitiesOnly              yes
 	    CheckHostIP                 no
 	    ProxyUseFdpass              no
