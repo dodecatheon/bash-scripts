@@ -82,7 +82,7 @@ for arg in "$@" ; do
         optarg="${optarg#=}"
         SHORTARGS+=("-$shortopt")
         if [ -n "$optarg" ] ; then
-          SHORTARGS+=("-$shortopt=${optarg}")       # handle long option with '=' separator before optarg
+          SHORTARGS+=("${optarg}")       # handle long option with '=' separator before optarg
         fi
       fi
       ;;
