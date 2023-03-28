@@ -10,57 +10,120 @@ cd                              # default is to cd $HOME
 : ${HOME:=$PWD}                 # set $HOME to Posix standard $PWD if not set
 PROG=$(basename $0)
 
+# move directory to the front of the path:
+# This also removes duplicates in PATH
+prepend_path () {
+  (($# == 1)) || return 1
+  NEWPATH="$1"
+  for dir in $(echo $PATH | tr ':' ' '); do
+    echo "$NEWPATH" | tr ':' '\n' | grep "^${dir}$" > /dev/null 2>&1 || NEWPATH="${NEWPATH}:${dir}"
+  done
+  export PATH="$NEWPATH"
+}
+
+# move directory to the end of the path:
+# This also removes duplicates in PATH
+append_path () {
+  (($# == 1)) || return 1
+  NEWPATH="$1"
+  for dir in $(echo $PATH | tr ':' ' '); do
+    echo "$NEWPATH" | tr ':' '\n' | grep "^${dir}$" > /dev/null 2>&1 || NEWPATH="${dir}:${NEWPATH}"
+  done
+  export PATH="$NEWPATH"
+}
+
 # Standardize path:
 #
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-# Prepend paths
+for dir in \
+  /usr/local/sbin \
+  /usr/local/bin \
+  /usr/sbin \
+  /usr/bin \
+  /sbin \
+  /bin ; do
+  append_path $dir
+done
+
 for dir in \
   /usr/local/buildtools/java/jdk/bin \
   /usr/lib/google-golang/bin \
   $HOME/bin \
   $HOME/.local/bin \
   ; do
-  if test -d $dir ; then
-    export PATH="$dir:$PATH"
-  fi
+  prepend_path "$dir"
 done
 
-function leading_tab_fmt {
-  _us="___"
-  echo "$1" | \
-    sed -e 's/  / /g' | \
-    printf "${_us}%s\n" | \
-    fmt -p"${_us}" | \
-    sed -re "s//\t/"
+# From https://github.com/UrsaDK/getopts_long/:
+getopts_long() {
+    : "${1:?Missing required parameter -- long optspec}"
+    : "${2:?Missing required parameter -- variable name}"
+
+    local optspec_short="${1%% *}-:"
+    local optspec_long="${1#* }"
+    local optvar="${2}"
+
+    shift 2
+
+    if [[ "${#}" == 0 ]]; then
+        local args=()
+        while [[ ${#BASH_ARGV[@]} -gt ${#args[@]} ]]; do
+            local index=$(( ${#BASH_ARGV[@]} - ${#args[@]} - 1 ))
+            args[${#args[@]}]="${BASH_ARGV[${index}]}"
+        done
+        set -- "${args[@]}"
+    fi
+
+    builtin getopts "${optspec_short}" "${optvar}" "${@}" || return 1
+    [[ "${!optvar}" == '-' ]] || return 0
+
+    printf -v "${optvar}" "%s" "${OPTARG%%=*}"
+
+    if [[ "${optspec_long}" =~ (^|[[:space:]])${!optvar}:([[:space:]]|$) ]]; then
+        OPTARG="${OPTARG#${!optvar}}"
+        OPTARG="${OPTARG#=}"
+
+        # Missing argument
+        if [[ -z "${OPTARG}" ]]; then
+            OPTARG="${!OPTIND}" && OPTIND=$(( OPTIND + 1 ))
+            [[ -z "${OPTARG}" ]] || return 0
+
+            if [[ "${optspec_short:0:1}" == ':' ]]; then
+                OPTARG="${!optvar}" && printf -v "${optvar}" ':'
+            else
+                [[ "${OPTERR}" == 0 ]] || \
+                    echo "${0}: option requires an argument -- ${!optvar}" >&2
+                unset OPTARG && printf -v "${optvar}" '?'
+            fi
+        fi
+    elif [[ "${optspec_long}" =~ (^|[[:space:]])${!optvar}([[:space:]]|$) ]]; then
+        unset OPTARG
+    else
+        # Invalid option
+        if [[ "${optspec_short:0:1}" == ':' ]]; then
+            OPTARG="${!optvar}"
+        else
+            [[ "${OPTERR}" == 0 ]] || echo "${0}: illegal option -- ${!optvar}" >&2
+            unset OPTARG
+        fi
+        printf -v "${optvar}" '?'
+    fi
 }
 
-unset l2s
-unset s2l
-declare -A l2s
-declare -A s2l
-l2s['group']='g'       ; s2l['g']='group'
-l2s['nickname']='n'    ; s2l['n']='nickname'
-l2s['project']='p'     ; s2l['p']='project'
-l2s['remote-user']='u' ; s2l['u']='remote-user'
-l2s['help']='h'        ; s2l['h']='help'
-l2s['verbose']='v'     ; s2l['v']='verbose'
-
-# Utility functions:
-shortlong () { echo "-$1|--${s2l[$1]}"; }
-longshort () { echo "-${l2s[$1]}|--$1"; }
 die() { printf "\n$1\n" >&2; usage ${2-2}; }  # complain to STDERR and exit with error
-needs_arg() {
-  if [ -z "$OPTARG" ]; then
-    die "Missing argument for $(shortlong $OPT) option"
-  else
-    case "${OPTARG}" in
-      :|-*)
-        die "Missing argument for $(shortlong $OPT) option"
-        ;;
-    esac
-  fi
+no_hyphen () {
+  case "${OPTARG}" in
+    -*)
+      # If the argument for this option starts with a hyphen, no valid
+      # argument was provided. Therefore, handle it as a missing
+      # argument error, using the current value of $OPT in the getopts
+      # context
+      case $OPT in
+        ?  ) die "MISSING ARGUMENT for -$OPT option" ;;
+        ??*) die "MISSING ARGUMENT for --$OPT option" ;;
+      esac
+      ;;
+  esac
 }
-no_arg() { if [ -n "$OPTARG" ]; then die "No argument allowed for $(shortlong $OPT) option"; fi; }
 
 usage () {
   cat >&2 <<EOF
@@ -70,12 +133,13 @@ Usage:  $PROG [options] <[REMOTE_USER@]REMOTE_HOST|LOGFILE> [PROJECT]
 Options:
 
         (option)		(arg)	(description)
+
 	-h|--help|help			Print help
 	-v|--verbose			Increase verbosity (can be repeated)
         -g|--group		GROUP	GCE group (default: compute)
         -n|--nickname		NICK	Optional nickname for remote host
         -p|--project		PROJECT	Gcloud project, if not able to infer from env or gcloud
-        -u|--remote-user	USER	Remote user, if not able to infer from 'whoami' on remote host
+        -u|--user		USER	Remote user, if not able to infer from 'whoami' on remote host
 
 Positional arguments:
 
@@ -92,43 +156,8 @@ Positional arguments:
 
 Long option arguments may be demarcated by either space or '='
 EOF
-  exit ${1-0}
+  exit ${1:-0}
 }
-
-# Convert all recognized long options to short options:
-SHORTARGS=()             # Use Bash indexed array to store arguments during processing
-for arg in "$@" ; do
-  case "$arg" in
-    help)         SHORTARGS+=("-h") ;;   # NB: 'help' positional arg turned into a -h option
-    --?*)
-      longopt="${arg#--}"
-      longopt="${longopt%%=*}"
-      shortopt="${l2s[$longopt]}"
-      if [ -z "$shortopt" ] ; then
-        # Pass through unrecognized options
-        SHORTARGS+=("$arg")
-      else
-        # Check for '='-separated options
-        optarg="${arg#--${longopt}}"
-        optarg="${optarg#=}"
-        SHORTARGS+=("-$shortopt")
-        if [ -n "$optarg" ] ; then
-          SHORTARGS+=("${optarg}")       # handle long option with '=' separator before optarg
-        fi
-      fi
-      ;;
-    *)            SHORTARGS+=("$arg") ;; # Pass through anything else
-  esac
-done
-
-# Reset $@ to processed values
-# Do this in a 'for' loop to ensure that individual arguments remain quoted if
-# necessary
-set --
-for arg in "${SHORTARGS[@]}"; do
-  set -- "$@" "$arg"
-done
-
 
 # Set optional argument defaults
 verbose=0
@@ -138,31 +167,33 @@ unset nickname
 unset REMOTE_USER
 
 # Process all options as short arguments.
-LONGARGS=()
-while getopts :hv-:g:l:p:r:s: OPT; do
+while getopts_long ':hvg:n:p:u: help verbose group: nickname: project: user:' OPT "$@"; do
   case "$OPT" in
-    h )    usage ;;
-    v )    no_arg    && ((++verbose)) ;;
-    g )    needs_arg && group="$OPTARG" ;;
-    n )    needs_arg && nickname="$OPTARG" ;;
-    p )    needs_arg && project="$OPTARG" ;;
-    u )    needs_arg && REMOTE_USER="$OPTARG" ;;
-    : )    die "Missing argument for $(shortlong $OPTARG) option" ;;
-    - )    if [ -z "$OPTARG" ] ; then
-             break # Stop processing remaining arguments
-           else
-             die "Unknown long option \'--${OPTARG}\'"
-           fi ;;  # Stop processing optional arguments
-    ? )    die "Unknown short option \'-${OPTARG}\'" ;;
+    h|help    ) usage                                       ;;
+    v|verbose ) ((++verbose))                               ;;
+    g|group   ) no_hyphen && group="$OPTARG"                ;;
+    n|nickname) no_hyphen && nickname="$OPTARG"             ;;
+    p|project ) no_hyphen && project="$OPTARG"              ;;
+    u|user    ) no_hyphen && REMOTE_USER="$OPTARG"          ;;
+    '?'       ) die "INVALID OPTION ${OPTARG}"              ;;
+    ':'       ) die "MISSING ARGUMENT for option ${OPTARG}" ;;
+    *         ) die "UNIMPLEMENTED OPTION ${OPT}"           ;;
   esac
-  # Save the long version of the args as we go along
-  if [ -n "$OPTARG" ] ; then
-    LONGARGS+=("--${s2l[$OPT]}=\"${OPTARG}\"")
-  else
-    LONGARGS+=("--${s2l[$OPT]}")
-  fi
 done
 shift $((OPTIND-1))             # remove parsed options and args from $@ list
+
+# ----------------------------------------------------------------------
+# Argument parsing complete
+# ----------------------------------------------------------------------
+# Start actual work:
+# ----------------------------------------------------------------------
+
+# Handle 'help'
+if (($#)) ; then
+  case "$1" in
+    help) usage ;;
+  esac
+fi
 
 # See if we can infer a Terraform deploy logfile from the first argument, if present,
 # or from any *deploy*.log files in the current directory.
@@ -174,7 +205,7 @@ if ! test -v logfile ; then
       fi
     fi
   else
-    testlogfile="$(ls -1 -rt *deploy*.log | tail -1)"
+    testlogfile="$(ls -1 -rt *deploy*.log 2>/dev/null| tail -1)"
     if [ -n "$testlogfile" ] ; then
       if [ -r "$testlogfile" ] ; then
         if grep name_prefix "$testlogfile" 1>/dev/null 2>&1 ; then
