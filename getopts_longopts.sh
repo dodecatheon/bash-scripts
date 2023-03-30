@@ -78,7 +78,7 @@ for arg in "$@" ; do
         SHORTARGS+=("$arg")
       else
         # Check for '='-separated options
-        optarg="${arg#--${longopt}}"
+        optarg="${arg#--${longopt}}*"
         optarg="${optarg#=}"
         SHORTARGS+=("-$shortopt")
         if [ -n "$optarg" ] ; then

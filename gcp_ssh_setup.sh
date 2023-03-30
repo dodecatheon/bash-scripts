@@ -21,28 +21,8 @@ prepend_path () {
   export PATH="$NEWPATH"
 }
 
-# move directory to the end of the path:
-# This also removes duplicates in PATH
-append_path () {
-  (($# == 1)) || return 1
-  NEWPATH="$1"
-  for dir in $(echo $PATH | tr ':' ' '); do
-    echo "$NEWPATH" | tr ':' '\n' | grep "^${dir}$" > /dev/null 2>&1 || NEWPATH="${dir}:${NEWPATH}"
-  done
-  export PATH="$NEWPATH"
-}
-
 # Standardize path:
-#
-for dir in \
-  /usr/local/sbin \
-  /usr/local/bin \
-  /usr/sbin \
-  /usr/bin \
-  /sbin \
-  /bin ; do
-  append_path $dir
-done
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 for dir in \
   /usr/local/buildtools/java/jdk/bin \
@@ -53,77 +33,7 @@ for dir in \
   prepend_path "$dir"
 done
 
-# From https://github.com/UrsaDK/getopts_long/:
-getopts_long() {
-    : "${1:?Missing required parameter -- long optspec}"
-    : "${2:?Missing required parameter -- variable name}"
-
-    local optspec_short="${1%% *}-:"
-    local optspec_long="${1#* }"
-    local optvar="${2}"
-
-    shift 2
-
-    if [[ "${#}" == 0 ]]; then
-        local args=()
-        while [[ ${#BASH_ARGV[@]} -gt ${#args[@]} ]]; do
-            local index=$(( ${#BASH_ARGV[@]} - ${#args[@]} - 1 ))
-            args[${#args[@]}]="${BASH_ARGV[${index}]}"
-        done
-        set -- "${args[@]}"
-    fi
-
-    builtin getopts "${optspec_short}" "${optvar}" "${@}" || return 1
-    [[ "${!optvar}" == '-' ]] || return 0
-
-    printf -v "${optvar}" "%s" "${OPTARG%%=*}"
-
-    if [[ "${optspec_long}" =~ (^|[[:space:]])${!optvar}:([[:space:]]|$) ]]; then
-        OPTARG="${OPTARG#${!optvar}}"
-        OPTARG="${OPTARG#=}"
-
-        # Missing argument
-        if [[ -z "${OPTARG}" ]]; then
-            OPTARG="${!OPTIND}" && OPTIND=$(( OPTIND + 1 ))
-            [[ -z "${OPTARG}" ]] || return 0
-
-            if [[ "${optspec_short:0:1}" == ':' ]]; then
-                OPTARG="${!optvar}" && printf -v "${optvar}" ':'
-            else
-                [[ "${OPTERR}" == 0 ]] || \
-                    echo "${0}: option requires an argument -- ${!optvar}" >&2
-                unset OPTARG && printf -v "${optvar}" '?'
-            fi
-        fi
-    elif [[ "${optspec_long}" =~ (^|[[:space:]])${!optvar}([[:space:]]|$) ]]; then
-        unset OPTARG
-    else
-        # Invalid option
-        if [[ "${optspec_short:0:1}" == ':' ]]; then
-            OPTARG="${!optvar}"
-        else
-            [[ "${OPTERR}" == 0 ]] || echo "${0}: illegal option -- ${!optvar}" >&2
-            unset OPTARG
-        fi
-        printf -v "${optvar}" '?'
-    fi
-}
-
-die() { printf "\n$1\n" >&2; usage ${2-2}; }  # complain to STDERR and exit with error
-no_hyphen () {
-  case "${OPTARG}" in
-    -*)
-      # If the argument for this option starts with a hyphen, no valid
-      # argument was provided. Therefore, handle it as a missing
-      # argument error, using the current value of $OPT in the getopts
-      # context
-      case $OPT in
-        ?  ) die "MISSING ARGUMENT for -$OPT option" ;;
-        ??*) die "MISSING ARGUMENT for --$OPT option" ;;
-      esac
-      ;;
-  esac
-}
+die() { printf "\n$1\n" >&2; usage ${2:-1}; }  # complain to STDERR and exit with error
 
 usage () {
   cat >&2 <<EOF
@@ -132,19 +42,20 @@ Usage:  $PROG [options] <[REMOTE_USER@]REMOTE_HOST|LOGFILE> [PROJECT]
 
 Options:
 
-        (option)		(arg)	(description)
+	(option)		(arg)	(description)
 
 	-h|--help|help			Print help
 	-v|--verbose			Increase verbosity (can be repeated)
-        -g|--group		GROUP	GCE group (default: compute)
-        -n|--nickname		NICK	Optional nickname for remote host
-        -p|--project		PROJECT	Gcloud project, if not able to infer from env or gcloud
-        -u|--user		USER	Remote user, if not able to infer from 'whoami' on remote host
+	-g|--group		GROUP	GCE group (default: compute)
+	-n|--nickname		NICK	Optional nickname for remote host
+	-p|--project		PROJECT	Gcloud project, if not able to infer from env or gcloud
+	-u|--user		USER	Remote user, if not able to infer from 'whoami' on remote host
 
 Positional arguments:
 
 	[REMOTE_USER@]REMOTE_HOST	Remote host, can be a prefix,
-					optional remote user can be supplied here or via -u option.
+					optional remote user can be supplied before '@'-sign
+					here or via -u option.
 					
 	LOGFILE				Alternatively, the first positional argument can be a
 					logfile containing the output of the terraform deploy command.
@@ -159,6 +70,77 @@ EOF
   exit ${1:-0}
 }
 
+# Not quite a drop-in replacement for getopts.
+# Modeled after https://github.com/UrsaDK/getopts_long, but pulled standard
+# error handling inside, and handle option-terminating '--' differently
+get_options () {
+  : "${1:?$0: Missing required parameter -- long optspec}"
+  : "${2:?$0: Missing required parameter -- variable name}"
+
+  local optspec_short="${1%% *}-:"
+  local optspec_long="${1#* }"
+  local optvar="${2}"
+  shift 2
+  # Ensure there's a leading colon on the short optspec:
+  [[ "${optspec_short:0:1}" == ':' ]] || optspec_short=":${optspec_short}"
+
+  # Ensure there are commandline arguments to parse
+  (($#)) || die "$(basename $0): NO CMDLINE ARGUMENTS TO PARSE" 127
+
+  # Halt option processing immediately if we hit a double-dash
+  unset OPTARG
+  : ${OPTIND:-1}
+  if [[ "${!OPTIND}" == "--" ]] ; then
+    ((++OPTIND))
+    return 1
+  fi
+
+  builtin getopts "${optspec_short}" "${optvar}" "$@" || return 1
+
+  # Handle builtin getopts short-option errors here:
+  case "${!optvar}" in
+    ':') die "MISSING ARGUMENT for \'-${OPTARG}\' option" 1 ;;
+    '?') die "UNKNOWN OPTION \'-${OPTARG}\'"              2 ;;
+    ?)   [[ "${OPTARG}" != "--" ]] || \
+         die "MISSING ARGUMENT for \'-${!optvar}\' option" 3 ;; 
+  esac
+
+  # If there was a non-hyphen short option found, without an error, return true
+  [[ "${!optvar}" == '-' ]] || return 0
+
+  # Set $optvar to the current OPTARG stripped of anything after the first '=':
+  printf -v "${optvar}" "%s" "${OPTARG%%=*}"
+
+  if [[ "${optspec_long}" =~ (^|[[:space:]])${!optvar}:([[:space:]]|$) ]]; then
+    # Found option matches a long option requiring an argument:
+    OPTARG="${OPTARG#${!optvar}}";   # Strip leading option name
+    OPTARG="${OPTARG#=}";            # Strip first '=', if found
+
+    # NB: we allow '--<longopt>=--' in the rare case that you actually want an
+    # arg-requiring option to be set to double-dash.
+    #
+    # But '-<shortopt> --' and '--<longopt> --' are errors for arg-requiring
+    # options.
+
+    if [[ -z "${OPTARG}" ]]; then
+      # Missing argument, so check the next space-separated argument and increment OPTIND
+      OPTARG="${!OPTIND}" && ((++OPTIND))
+      # Error out if space-separated argument happens to be a double-dash
+      [[ "${OPTARG}" != "--" ]] || die "MISSING ARGUMENT for \'--${!optvar}\' option" 4
+
+      # Return true unless there's no argument provided
+      [[ -z "${OPTARG}" ]] || return 0
+      die "MISSING ARGUMENT for \'--${!optvar}\' option" 5
+    fi
+  elif [[ "${optspec_long}" =~ (^|[[:space:]])${!optvar}([[:space:]]|$) ]]; then
+    # option matches, but no argument required, so unset OPTARG
+    unset OPTARG
+  else
+    # The long option wasn't recognized as part of $optspec_long
+    die "UNKNOWN OPTION \'--${!optvar}\'" 6
+  fi
+}
+
 # Set optional argument defaults
 verbose=0
 group="compute"
@@ -166,21 +148,18 @@ unset project
 unset nickname
 unset REMOTE_USER
 
-# Process all options as short arguments.
-while getopts_long ':hvg:n:p:u: help verbose group: nickname: project: user:' OPT "$@"; do
+# Process options in short or long form:
+while get_options 'hvg:n:p:u: help verbose group: nickname: project: user:' OPT "$@"; do
   case "$OPT" in
-    h|help    ) usage                                       ;;
-    v|verbose ) ((++verbose))                               ;;
-    g|group   ) no_hyphen && group="$OPTARG"                ;;
-    n|nickname) no_hyphen && nickname="$OPTARG"             ;;
-    p|project ) no_hyphen && project="$OPTARG"              ;;
-    u|user    ) no_hyphen && REMOTE_USER="$OPTARG"          ;;
-    '?'       ) die "INVALID OPTION ${OPTARG}"              ;;
-    ':'       ) die "MISSING ARGUMENT for option ${OPTARG}" ;;
-    *         ) die "UNIMPLEMENTED OPTION ${OPT}"           ;;
+    h|help    ) usage                 ;;
+    v|verbose ) ((++verbose))         ;;
+    g|group   ) group="$OPTARG"       ;;
+    n|nickname) nickname="$OPTARG"    ;;
+    p|project ) project="$OPTARG"     ;;
+    u|user    ) REMOTE_USER="$OPTARG" ;;
   esac
 done
-shift $((OPTIND-1))             # remove parsed options and args from $@ list
+shift $((OPTIND-1)) # remove parsed options and args from $@ list
 
 # ----------------------------------------------------------------------
 # Argument parsing complete
